@@ -3,43 +3,65 @@ import { BrowserRouter as Router, Route, Routes, Navigate } from "react-router-d
 import { useEffect, useState } from "react";
 import { auth, db } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 
 // Pages
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 import SignUpPage from "./pages/SignUpPage";
-import StudentDashboard from "./pages/StudentDashboard";
-import TeacherDashboard from "./pages/TeacherDashboard";
-import ManageClasses from "./pages/ManageClasses";
-import ManageQuizzes from "./pages/ManageQuizzes";
-import ReportsAnalytics from "./pages/ReportsAnalytics";
+
+// Student Side
+import StudentDashboard from "./pages/studentSide/StudentDashboard";
+
+// Teacher Side
+import TeacherDashboard from "./pages/teacherSide/TeacherDashboard";
+import ManageClasses from "./pages/teacherSide/ManageClasses";
+import ManageQuizzes from "./pages/teacherSide/ManageQuizzes";
+import ReportsAnalytics from "./pages/teacherSide/ReportsAnalytics";
 
 function App() {
-  const [authUser, setAuthUser] = useState(null); // Firebase user
-  const [userDoc, setUserDoc] = useState(null);   // Firestore user data
+  const [authUser, setAuthUser] = useState(null);
+  const [userDoc, setUserDoc] = useState(null);
+  const [role, setRole] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
-      setLoading(true);
       if (user) {
         setAuthUser(user);
         try {
-          const ref = doc(db, "users", user.uid);
-          const snap = await getDoc(ref);
-          if (snap.exists()) {
-            setUserDoc(snap.data());
+          // 🔹 1. Check if user exists in students (by email)
+          const studentQuery = query(
+            collection(db, "students"),
+            where("email", "==", user.email)
+          );
+          const studentSnap = await getDocs(studentQuery);
+
+          // 🔹 2. Check if user exists in teachers (by UID)
+          const teacherRef = doc(db, "users", user.uid);
+          const teacherSnap = await getDoc(teacherRef);
+
+          if (!studentSnap.empty) {
+            // ✅ Student found
+            setUserDoc(studentSnap.docs[0].data());
+            setRole("student");
+          } else if (teacherSnap.exists()) {
+            // ✅ Teacher found
+            const teacherData = teacherSnap.data();
+            setUserDoc(teacherData);
+            setRole(teacherData.role || "teacher");
           } else {
+            // ❌ No matching record
             setUserDoc(null);
+            setRole(null);
           }
         } catch (err) {
-          console.error("Error fetching user doc:", err);
-          setUserDoc(null);
+          console.error("Error fetching user document:", err);
         }
       } else {
         setAuthUser(null);
         setUserDoc(null);
+        setRole(null);
       }
       setLoading(false);
     });
@@ -47,73 +69,86 @@ function App() {
     return () => unsub();
   }, []);
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-lg font-semibold">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <Router>
       <Routes>
-        {/* Public Routes */}
+        {/* 🔸 Public Routes */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/login"
+          element={
+            !authUser ? (
+              <LoginPage />
+            ) : role === "teacher" ? (
+              <Navigate to="/teacher" replace />
+            ) : role === "student" ? (
+              <Navigate to="/studentDashboard" replace />
+            ) : (
+              <LoginPage />
+            )
+          }
+        />
         <Route path="/signup" element={<SignUpPage />} />
 
-        {/* Student Dashboard (protected) */}
+        {/* 🔹 Student Dashboard */}
         <Route
           path="/studentDashboard"
           element={
-            authUser && userDoc?.role === "student" ? (
+            authUser && role === "student" ? (
               <StudentDashboard user={authUser} userDoc={userDoc} />
+            ) : authUser && !role ? (
+              <div className="min-h-screen flex items-center justify-center">
+                <p>Loading user data...</p>
+              </div>
             ) : (
               <Navigate to="/login" replace />
             )
           }
         />
 
-        {/* Teacher Dashboard (protected) */}
+        {/* 🔹 Teacher Dashboard */}
         <Route
-          path="/teacherDashboard"
+          path="/teacher"
           element={
-            authUser && userDoc?.role === "teacher" ? (
+            authUser && role === "teacher" ? (
               <TeacherDashboard user={authUser} userDoc={userDoc} />
+            ) : authUser && !role ? (
+              <div className="min-h-screen flex items-center justify-center">
+                <p>Loading user data...</p>
+              </div>
             ) : (
               <Navigate to="/login" replace />
             )
           }
-        />
+        >
+          <Route
+            index
+            element={
+              <div className="p-4">
+                <h2 className="text-xl font-semibold mb-4">
+                  Welcome to Smart Quiz!
+                </h2>
+                <p>
+                  Select an option from the sidebar to manage your classes,
+                  quizzes, or view analytics.
+                </p>
+              </div>
+            }
+          />
+          <Route path="classes" element={<ManageClasses />} />
+          <Route path="quizzes" element={<ManageQuizzes />} />
+          <Route path="reports" element={<ReportsAnalytics />} />
+        </Route>
 
-        {/* Teacher-only pages (protected) */}
-        <Route
-          path="/classes"
-          element={
-            authUser && userDoc?.role === "teacher" ? (
-              <ManageClasses />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route
-          path="/quizzes"
-          element={
-            authUser && userDoc?.role === "teacher" ? (
-              <ManageQuizzes />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            authUser && userDoc?.role === "teacher" ? (
-              <ReportsAnalytics />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-
-        {/* Catch all → Landing */}
+        {/* 🔸 Catch-all Redirect */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

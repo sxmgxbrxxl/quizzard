@@ -1,9 +1,22 @@
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { signOut } from "firebase/auth";
+import { auth } from "../../firebase/firebaseConfig"; // adjust mo path kung iba folder mo
 
 export default function StudentDashboard() {
   const navigate = useNavigate();
   const [quizCode, setQuizCode] = useState("");
+
+  // 🔹 Logout handler
+  const handleLogout = async () => {
+    try {
+      await signOut(auth); // Firebase logout
+      navigate("/login"); // redirect to Login page
+    } catch (error) {
+      console.error("Logout failed:", error);
+      alert("Failed to logout. Please try again.");
+    }
+  };
 
   const handleJoinQuiz = () => {
     if (quizCode.trim() !== "") {
@@ -20,7 +33,7 @@ export default function StudentDashboard() {
       <nav className="flex items-center justify-between px-8 py-4 bg-white shadow">
         <h1 className="text-2xl font-bold text-indigo-600">🎓 Student Dashboard</h1>
         <button
-          onClick={() => navigate("/")}
+          onClick={handleLogout}
           className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-indigo-700 transition-colors duration-200"
         >
           Logout
