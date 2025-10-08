@@ -35,5 +35,10 @@ FastAPI backend with Gemini AI integration for automatic quiz generation from PD
 
 pip install -r requirements.txt
 
+Create .env file with your Gemini API key:
+
+   # Edit .env and add your Gemini API key. NO SPACE NO ""/''
+   GEMINI_API_KEY=your_gemini_api_key_here
+
    ## to run the Backend
    uvicorn main:app --reload --port 8000
