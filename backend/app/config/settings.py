@@ -5,23 +5,20 @@ from dotenv import load_dotenv
 # Get the directory where settings.py is located
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# Try to load .env from multiple possible locations
-env_paths = [
-    BASE_DIR / '.env',                    # Root directory
-    BASE_DIR / 'backend' / '.env',        # backend folder
-    Path.cwd() / '.env',                  # Current working directory
-]
+# Use explicit path to .env file in backend directory
+env_path = BASE_DIR / '.env'
 
-# Try loading from each path
-env_loaded = False
-for env_path in env_paths:
-    if env_path.exists():
-        load_dotenv(env_path)
-        env_loaded = True
-        break
+if env_path.exists():
+    print(f"Loading .env from: {env_path}")
+    # override=True ensures this file takes precedence
+    load_dotenv(dotenv_path=env_path, override=True)
+else:
+    print(f"Warning: .env file not found at: {env_path}")
+    print(f"Current working directory: {Path.cwd()}")
+    print(f"BASE_DIR: {BASE_DIR}")
 
 class Settings:
-    # Load API key from environment variable
+    # Gemini API key - loaded from .env file
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
     # Other settings
@@ -38,13 +35,15 @@ class Settings:
         # Validate API key
         if not self.GEMINI_API_KEY:
             raise ValueError(
-                "GEMINI_API_KEY not found in environment variables. "
-                "Please create a .env file with GEMINI_API_KEY=your_key"
+                "GEMINI_API_KEY not found in .env file. "
+                "Please create a .env file in the backend directory with: "
+                "GEMINI_API_KEY=your_api_key_here"
             )
         elif len(self.GEMINI_API_KEY) < 30:
             raise ValueError(
                 f"GEMINI_API_KEY appears invalid (length: {len(self.GEMINI_API_KEY)}). "
-                f"Expected ~39 characters."
+                f"Expected ~39 characters. "
+                f"Current value starts with: {self.GEMINI_API_KEY[:10]}..."
             )
     
     def _debug_print(self):
@@ -53,14 +52,9 @@ class Settings:
         print("🔧 SETTINGS INITIALIZATION")
         print("="*60)
         
-        print("\n📋 Environment Variables:")
-        for key, value in os.environ.items():
-            if 'GEMINI' in key.upper():
-                masked = f"{value[:10]}...{value[-5:]}" if len(value) > 15 else value
-                print(f"   {key} = {masked}")
-        
-        print(f"\n✅ Gemini API Key loaded successfully!")
+        print(f"\n✅ Gemini API Key loaded from .env successfully!")
         print(f"   Length: {len(self.GEMINI_API_KEY)} characters")
+        print(f"   BASE_DIR: {BASE_DIR}")
         print("="*60 + "\n")
 
 # Create singleton instance
