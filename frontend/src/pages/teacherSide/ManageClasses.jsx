@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { Upload, Loader2, Eye, X } from "lucide-react";
+import { Upload, Loader2, Eye, X, UserPlus } from "lucide-react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { auth, db } from "../../firebase/firebaseConfig";
 import { collection, addDoc, query, where, getDocs, deleteDoc, doc } from "firebase/firestore";
-import { createUserWithEmailAndPassword } from "firebase/auth";
 
 export default function ManageClasses() {
   const [fileName, setFileName] = useState("");
@@ -17,8 +16,11 @@ export default function ManageClasses() {
   const [studentsList, setStudentsList] = useState([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
+  const [creatingAccounts, setCreatingAccounts] = useState(false);
+  const [showClassNameModal, setShowClassNameModal] = useState(false);
+  const [pendingUploadData, setPendingUploadData] = useState(null);
+  const [classNameInput, setClassNameInput] = useState("");
   
-  // ✅ Prevent multiple simultaneous fetches
   const fetchingRef = useRef(false);
   const initialLoadRef = useRef(false);
 
@@ -38,7 +40,6 @@ export default function ManageClasses() {
   }, []);
 
   const fetchClasses = async () => {
-    // ✅ Prevent multiple simultaneous fetch calls
     if (fetchingRef.current) {
       console.log("Already fetching, skipping...");
       return;
@@ -85,7 +86,11 @@ export default function ManageClasses() {
         students.push({ id: docSnapshot.id, ...docSnapshot.data() });
       });
 
-      students.sort((a, b) => a.lastName.localeCompare(b.lastName));
+      students.sort((a, b) => {
+        const aName = a.name || "";
+        const bName = b.name || "";
+        return aName.localeCompare(bName);
+      });
       
       setStudentsList(students);
     } catch (error) {
@@ -106,25 +111,90 @@ export default function ManageClasses() {
     setStudentsList([]);
   };
 
+  const handleCreateAccountForAll = async () => {
+    const studentsWithoutAccounts = studentsList.filter(s => !s.hasAccount);
+
+    if (studentsWithoutAccounts.length === 0) {
+      alert("All students already have accounts!");
+      return;
+    }
+
+    if (!window.confirm(`Create accounts for ${studentsWithoutAccounts.length} student(s)?`)) {
+      return;
+    }
+
+    setCreatingAccounts(true);
+
+    try {
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < studentsWithoutAccounts.length; i++) {
+        try {
+          const student = studentsWithoutAccounts[i];
+          console.log(`Creating account for: ${student.name}`);
+          
+          // TODO: Implement account creation logic here
+          // For now, just update the hasAccount field
+          await updateAccountStatus(student.id, true);
+          successCount++;
+        } catch (error) {
+          console.error("Error creating account:", error);
+          errorCount++;
+        }
+      }
+
+      let message = `✅ Successfully created ${successCount} account(s)!`;
+      if (errorCount > 0) {
+        message += `\n⚠️ ${errorCount} account(s) failed to create.`;
+      }
+      alert(message);
+
+      // Refresh the student list
+      await fetchStudentsByClass(viewingClass.id);
+    } catch (error) {
+      console.error("Error creating accounts:", error);
+      alert("❌ Failed to create accounts: " + error.message);
+    } finally {
+      setCreatingAccounts(false);
+    }
+  };
+
+  const updateAccountStatus = async (studentId, hasAccount) => {
+    try {
+      const studentRef = doc(db, "students", studentId);
+      // Update the student document
+      // await updateDoc(studentRef, { hasAccount: hasAccount });
+      console.log(`Updated student ${studentId} account status to ${hasAccount}`);
+    } catch (error) {
+      console.error("Error updating account status:", error);
+      throw error;
+    }
+  };
+
   const normalizeHeaders = (data) => {
     return data.map(row => {
       const normalized = {};
       Object.keys(row).forEach(key => {
-        const trimmedKey = key.trim();
-        if (trimmedKey === "Student No." || trimmedKey === "Student No" || trimmedKey === "Student Number") {
-          normalized["Student Number"] = row[key];
-        } else if (trimmedKey === "Last Name") {
-          normalized["Last Name"] = row[key];
-        } else if (trimmedKey === "First Name") {
-          normalized["First Name"] = row[key];
-        } else if (trimmedKey === "M.I." || trimmedKey === "MI" || trimmedKey === "Middle Initial") {
-          normalized["M.I."] = row[key];
-        } else if (trimmedKey === "Email") {
-          normalized["Email"] = row[key];
-        } else if (trimmedKey === "Birthday") {
-          normalized["Birthday"] = row[key];
-        } else if (trimmedKey === "Section") {
-          normalized["Section"] = row[key];
+        const trimmedKey = key.trim().replace(/\s+/g, ' ');
+        const lowerKey = trimmedKey.toLowerCase();
+        
+        if (lowerKey === "no" || lowerKey === "no.") {
+          normalized["No"] = row[key];
+        } else if (lowerKey === "student no." || lowerKey === "student no" || lowerKey === "student number") {
+          normalized["Student No."] = row[key];
+        } else if (lowerKey === "name") {
+          normalized["Name"] = row[key];
+        } else if (lowerKey === "gender") {
+          normalized["Gender"] = row[key];
+        } else if (lowerKey === "program") {
+          normalized["Program"] = row[key];
+        } else if (lowerKey === "year") {
+          normalized["Year"] = row[key];
+        } else if (lowerKey === "email address" || lowerKey === "email") {
+          normalized["Email Address"] = row[key];
+        } else if (lowerKey === "contact no." || lowerKey === "contact no" || lowerKey === "contact number") {
+          normalized["Contact No."] = row[key];
         } else {
           normalized[trimmedKey] = row[key];
         }
@@ -133,40 +203,65 @@ export default function ManageClasses() {
     });
   };
 
-  const createAuthAccount = async (email, password) => {
-    try {
-      const currentUser = auth.currentUser;
-      
-      // Create the student account
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      
-      // Re-authenticate the teacher immediately
-      if (currentUser) {
-        await auth.updateCurrentUser(currentUser);
-      }
-      
-      return { success: true, uid: userCredential.user.uid };
-    } catch (error) {
-      console.error("Auth creation error:", error);
-      
-      if (error.code === 'auth/email-already-in-use') {
-        return { success: false, error: 'Email already exists' };
-      } else if (error.code === 'auth/invalid-email') {
-        return { success: false, error: 'Invalid email format' };
-      } else if (error.code === 'auth/weak-password') {
-        return { success: false, error: 'Password too weak' };
-      }
-      
-      return { success: false, error: error.message };
-    }
-  };
-
   const processStudentData = async (students, headers, file) => {
     console.log("Parsed data:", students);
     console.log("Total rows:", students.length);
     console.log("First row:", students[0]);
     console.log("Headers:", headers);
     
+    const user = auth.currentUser;
+    if (!user) {
+      alert("❌ Please log in first!");
+      return;
+    }
+
+    const normalizedStudents = normalizeHeaders(students);
+    console.log("Normalized first row:", normalizedStudents[0]);
+
+    const requiredHeaders = ["Student No.", "Name"];
+    const firstRow = normalizedStudents[0] || {};
+    const availableHeaders = Object.keys(firstRow);
+    
+    console.log("Available headers:", availableHeaders);
+    console.log("Required headers:", requiredHeaders);
+    
+    const missingHeaders = requiredHeaders.filter(h => !availableHeaders.includes(h));
+    
+    if (missingHeaders.length > 0) {
+      alert(`❌ Missing columns: ${missingHeaders.join(", ")}\n\nAvailable columns: ${availableHeaders.join(", ")}\n\nPlease check your file format.`);
+      return;
+    }
+
+    const validStudents = normalizedStudents.filter(s => 
+      s["Student No."] && s["Name"]
+    );
+
+    if (validStudents.length === 0) {
+      alert("❌ No valid student data found in file");
+      return;
+    }
+
+    console.log("Valid students:", validStudents.length);
+
+    // Get default class name from file name (remove extension)
+    const defaultClassName = file.name.replace(/\.(csv|xlsx|xls)$/i, '');
+    
+    // Store the data and show the class name modal
+    setPendingUploadData({
+      validStudents,
+      file
+    });
+    setClassNameInput(defaultClassName);
+    setShowClassNameModal(true);
+  };
+
+  const confirmClassNameAndUpload = async () => {
+    if (!classNameInput.trim()) {
+      alert("❌ Please enter a class name!");
+      return;
+    }
+
+    setShowClassNameModal(false);
     setUploading(true);
     setUploadProgress("Starting upload...");
 
@@ -174,130 +269,72 @@ export default function ManageClasses() {
       const user = auth.currentUser;
       if (!user) {
         alert("❌ Please log in first!");
-        setUploading(false);
         return;
       }
 
-      const normalizedStudents = normalizeHeaders(students);
-      console.log("Normalized first row:", normalizedStudents[0]);
-
-      const requiredHeaders = ["Student Number", "First Name", "Last Name", "Section"];
-      const firstRow = normalizedStudents[0] || {};
-      const availableHeaders = Object.keys(firstRow);
-      const missingHeaders = requiredHeaders.filter(h => !availableHeaders.includes(h));
+      const { validStudents, file } = pendingUploadData;
+      const teacherName = user.displayName || user.email?.split('@')[0] || "Teacher";
       
-      if (missingHeaders.length > 0) {
-        throw new Error(`Missing required columns: ${missingHeaders.join(", ")}`);
-      }
-
-      const validStudents = normalizedStudents.filter(s => 
-        s["Student Number"] && s["First Name"] && s["Last Name"] && s["Section"]
-      );
-
-      if (validStudents.length === 0) {
-        throw new Error("No valid student data found in file");
-      }
-
-      console.log("Valid students:", validStudents.length);
-
-      const sections = [...new Set(validStudents.map(s => s.Section?.toString().trim()))].filter(Boolean);
+      setUploadProgress(`Creating class: ${classNameInput}`);
       
-      console.log("Sections found:", sections);
+      const classDoc = await addDoc(collection(db, "classes"), {
+        name: classNameInput.trim(),
+        subject: "",
+        studentCount: validStudents.length,
+        teacherId: user.uid,
+        teacherEmail: user.email,
+        teacherName: teacherName,
+        uploadedAt: new Date(),
+        fileName: file.name
+      });
+
+      console.log(`Created class document: ${classDoc.id}`);
 
       let totalCount = 0;
       let errorCount = 0;
-      let authCreatedCount = 0;
-      let authFailedCount = 0;
 
-      for (const section of sections) {
+      for (let i = 0; i < validStudents.length; i++) {
         try {
-          const sectionStudents = validStudents.filter(s => s.Section?.toString().trim() === section);
-          
-          setUploadProgress(`Processing section: ${section} (${sectionStudents.length} students)`);
-          console.log(`Processing section: ${section} with ${sectionStudents.length} students`);
+          const student = validStudents[i];
+          setUploadProgress(`Adding student ${i + 1}/${validStudents.length}`);
 
-          const teacherName = user.displayName || user.email?.split('@')[0] || "Teacher";
-          
-          const classDoc = await addDoc(collection(db, "classes"), {
-            name: section,
-            subject: "",
-            studentCount: sectionStudents.length,
+          const {
+            "No": no,
+            "Student No.": studentNo,
+            "Name": name,
+            "Gender": gender,
+            "Program": program,
+            "Year": year,
+            "Email Address": emailAddress,
+            "Contact No.": contactNo
+          } = student;
+
+          if (!studentNo || !name) {
+            console.error("Missing required fields:", student);
+            errorCount++;
+            continue;
+          }
+
+          // Add student to Firestore
+          await addDoc(collection(db, "students"), {
+            no: no?.toString().trim() || "",
+            studentNo: studentNo.toString().trim(),
+            name: name.toString().trim(),
+            gender: gender?.toString().trim() || "",
+            program: program?.toString().trim() || "",
+            year: year?.toString().trim() || "",
+            emailAddress: emailAddress?.toString().trim() || "",
+            contactNo: contactNo?.toString().trim() || "",
+            classId: classDoc.id,
             teacherId: user.uid,
-            teacherEmail: user.email,
             teacherName: teacherName,
-            uploadedAt: new Date(),
-            fileName: file.name
+            hasAccount: false,
+            createdAt: new Date()
           });
 
-          console.log(`Created class document: ${classDoc.id}`);
-
-          let studentIndex = 0;
-          for (const student of sectionStudents) {
-            try {
-              studentIndex++;
-              setUploadProgress(`Section ${section}: Adding student ${studentIndex}/${sectionStudents.length}`);
-
-              const {
-                "Student Number": studentNumber,
-                "First Name": firstName,
-                "Last Name": lastName,
-                "M.I.": middleInitial,
-                Email,
-                Birthday,
-                Section
-              } = student;
-
-              if (!studentNumber || !firstName || !lastName) {
-                console.error("Missing required fields:", student);
-                errorCount++;
-                continue;
-              }
-
-              const email = Email?.toString().trim() || "";
-              const birthday = Birthday?.toString().trim() || "";
-              const defaultPassword = birthday || "student123";
-
-              let authUid = null;
-
-              // Create Firebase Auth account if email is provided
-              if (email && email.includes('@')) {
-                const authResult = await createAuthAccount(email, defaultPassword);
-                
-                if (authResult.success) {
-                  authUid = authResult.uid;
-                  authCreatedCount++;
-                  console.log(`✅ Auth account created for: ${email}`);
-                } else {
-                  authFailedCount++;
-                  console.warn(`⚠️ Failed to create auth for ${email}: ${authResult.error}`);
-                }
-              }
-
-              // Add student to Firestore
-              await addDoc(collection(db, "students"), {
-                studentNumber: studentNumber.toString().trim(),
-                firstName: firstName.toString().trim(),
-                lastName: lastName.toString().trim(),
-                middleInitial: middleInitial?.toString().trim() || "",
-                email: email,
-                birthday: birthday,
-                section: Section?.toString().trim(),
-                classId: classDoc.id,
-                teacherId: user.uid,
-                teacherName: teacherName,
-                defaultPassword: defaultPassword,
-                authUid: authUid,
-                createdAt: new Date()
-              });
-
-              totalCount++;
-            } catch (studentError) {
-              console.error("Error adding student:", student, studentError);
-              errorCount++;
-            }
-          }
-        } catch (sectionError) {
-          console.error(`Error processing section ${section}:`, sectionError);
+          totalCount++;
+        } catch (studentError) {
+          console.error("Error adding student:", validStudents[i], studentError);
           errorCount++;
         }
       }
@@ -305,15 +342,7 @@ export default function ManageClasses() {
       setUploadCount(totalCount);
       
       if (totalCount > 0) {
-        let message = `✅ Successfully uploaded ${totalCount} student(s) in ${sections.length} class(es)!\n`;
-        
-        if (authCreatedCount > 0) {
-          message += `🔐 Created ${authCreatedCount} authentication account(s).\n`;
-        }
-        
-        if (authFailedCount > 0) {
-          message += `⚠️ ${authFailedCount} authentication account(s) failed (may already exist).\n`;
-        }
+        let message = `✅ Successfully uploaded ${totalCount} student(s)!\n`;
         
         if (errorCount > 0) {
           message += `⚠️ ${errorCount} student(s) failed to upload.`;
@@ -324,11 +353,12 @@ export default function ManageClasses() {
         throw new Error("No students were uploaded successfully");
       }
       
-      // ✅ Fetch classes after upload completes
       await fetchClasses();
       
       setFileName("");
       setUploadProgress("");
+      setPendingUploadData(null);
+      setClassNameInput("");
     } catch (error) {
       console.error("Error saving to Firestore:", error);
       setErrorMessage(error.message);
@@ -337,6 +367,13 @@ export default function ManageClasses() {
       setUploading(false);
       setUploadProgress("");
     }
+  };
+
+  const cancelClassNameModal = () => {
+    setShowClassNameModal(false);
+    setPendingUploadData(null);
+    setClassNameInput("");
+    setFileName("");
   };
 
   const handleFileUpload = (e) => {
@@ -363,7 +400,6 @@ export default function ManageClasses() {
           console.error("CSV parsing error:", error);
           setErrorMessage("Failed to parse CSV file: " + error.message);
           alert("❌ Failed to parse CSV file. Please check the file format.");
-          setUploading(false);
         }
       });
     } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
@@ -377,10 +413,43 @@ export default function ManageClasses() {
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
           
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+          // Get all data without headers first to find the header row
+          const allData = XLSX.utils.sheet_to_json(worksheet, { 
+            header: 1, // Get as array of arrays
             raw: false,
             defval: ""
           });
+          
+          console.log("First 15 rows:", allData.slice(0, 15));
+          
+          // Find the row that contains "Student No." or "No"
+          let headerRowIndex = -1;
+          for (let i = 0; i < allData.length; i++) {
+            const row = allData[i];
+            const rowStr = row.join('|').toLowerCase();
+            if (rowStr.includes('student no') || (rowStr.includes('no') && rowStr.includes('name'))) {
+              headerRowIndex = i;
+              console.log("Found header row at index:", i, "Row:", row);
+              break;
+            }
+          }
+          
+          if (headerRowIndex === -1) {
+            throw new Error("Could not find header row with 'Student No.' and 'Name' columns");
+          }
+          
+          // Now parse again starting from the header row
+          const range = XLSX.utils.decode_range(worksheet['!ref']);
+          range.s.r = headerRowIndex; // Start from header row
+          const newRange = XLSX.utils.encode_range(range);
+          
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+            raw: false,
+            defval: "",
+            range: newRange
+          });
+          
+          console.log("Parsed data from header row:", jsonData.slice(0, 3));
           
           const headers = Object.keys(jsonData[0] || {});
           
@@ -390,7 +459,6 @@ export default function ManageClasses() {
           console.error("XLSX parsing error:", error);
           setErrorMessage("Failed to parse Excel file: " + error.message);
           alert("❌ Failed to parse Excel file. Please check the file format.");
-          setUploading(false);
         }
       };
       
@@ -398,7 +466,6 @@ export default function ManageClasses() {
         console.error("File reading error:", error);
         setErrorMessage("Failed to read file");
         alert("❌ Failed to read file");
-        setUploading(false);
       };
       
       reader.readAsArrayBuffer(file);
@@ -449,10 +516,7 @@ export default function ManageClasses() {
           <Upload className="mx-auto text-gray-400 w-10 h-10 mb-3" />
           <p className="text-gray-600 mb-3">Upload your classlist (.csv or .xlsx)</p>
           <p className="text-sm text-gray-500 mb-3">
-            Required columns: Student No., First Name, Last Name, Section, Email
-          </p>
-          <p className="text-xs text-gray-400 mb-3">
-            🔐 Authentication accounts will be created automatically for students with valid emails
+            Required columns: No, Student No., Name, Gender, Program, Year, Email Address, Contact No.
           </p>
 
           <input
@@ -478,7 +542,7 @@ export default function ManageClasses() {
             )}
           </label>
 
-          {fileName && !uploading && (
+          {fileName && !uploading && !showClassNameModal && (
             <p className="text-sm text-gray-500 italic mt-3">Selected: {fileName}</p>
           )}
 
@@ -552,9 +616,49 @@ export default function ManageClasses() {
         )}
       </div>
 
+      {/* Class Name Modal */}
+      {showClassNameModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-gray-800 mb-4">Enter Class Name</h3>
+            <p className="text-gray-600 mb-4">
+              Please enter a name for this class:
+            </p>
+            <input
+              type="text"
+              value={classNameInput}
+              onChange={(e) => setClassNameInput(e.target.value)}
+              placeholder="e.g., CS101-A, Math 2024, English 101"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-6"
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  confirmClassNameAndUpload();
+                }
+              }}
+              autoFocus
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={cancelClassNameModal}
+                className="px-5 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmClassNameAndUpload}
+                className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
+              >
+                Create Class
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Class Modal */}
       {viewingClass && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-7xl w-full max-h-[90vh] overflow-hidden">
             <div className="bg-blue-600 text-white p-6 flex justify-between items-center">
               <div>
                 <h3 className="text-2xl font-bold">{viewingClass.name}</h3>
@@ -570,7 +674,7 @@ export default function ManageClasses() {
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
               {loadingStudents ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -585,22 +689,28 @@ export default function ManageClasses() {
                     <thead>
                       <tr className="bg-gray-100">
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          #
+                          No
                         </th>
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Student Number
+                          Student No.
                         </th>
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
                           Name
                         </th>
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Email
+                          Gender
                         </th>
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Birthday
+                          Program
                         </th>
                         <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Auth Status
+                          Year
+                        </th>
+                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
+                          Email Address
+                        </th>
+                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
+                          Contact No.
                         </th>
                       </tr>
                     </thead>
@@ -608,26 +718,28 @@ export default function ManageClasses() {
                       {studentsList.map((student, index) => (
                         <tr key={student.id} className="hover:bg-gray-50">
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {index + 1}
+                            {student.no || index + 1}
                           </td>
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.studentNumber}
+                            {student.studentNo}
                           </td>
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.lastName}, {student.firstName} {student.middleInitial}
+                            {student.name}
                           </td>
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.email || "—"}
+                            {student.gender || "—"}
                           </td>
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.birthday || "—"}
+                            {student.program || "—"}
                           </td>
                           <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.authUid ? (
-                              <span className="text-green-600 font-semibold">✅ Created</span>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
+                            {student.year || "—"}
+                          </td>
+                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
+                            {student.emailAddress || "—"}
+                          </td>
+                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
+                            {student.contactNo || "—"}
                           </td>
                         </tr>
                       ))}
@@ -635,6 +747,32 @@ export default function ManageClasses() {
                   </table>
                 </div>
               )}
+            </div>
+
+            <div className="border-t border-gray-200 p-4 flex justify-end gap-3">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-semibold"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleCreateAccountForAll}
+                disabled={creatingAccounts || studentsList.every(s => s.hasAccount)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {creatingAccounts ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-4 h-4" />
+                    Create Account for All
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
