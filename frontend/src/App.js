@@ -1,23 +1,19 @@
-import "./styles/App.css";
 import { BrowserRouter as Router, Route, Routes, Navigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { auth, db } from "./firebase/firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 
-// Pages
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 import SignUpPage from "./pages/SignUpPage";
-
-// Student Side
 import StudentDashboard from "./pages/studentSide/StudentDashboard";
-
-// Teacher Side
 import TeacherDashboard from "./pages/teacherSide/TeacherDashboard";
 import ManageClasses from "./pages/teacherSide/ManageClasses";
 import ManageQuizzes from "./pages/teacherSide/ManageQuizzes";
 import ReportsAnalytics from "./pages/teacherSide/ReportsAnalytics";
+
+import AdminHomePage from "./pages/AdminSide/AdminHomePage";
 
 function App() {
   const [authUser, setAuthUser] = useState(null);
@@ -29,36 +25,35 @@ function App() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setAuthUser(user);
+
         try {
-          // 🔹 1. Check if user exists in students (by email)
-          const studentQuery = query(
-            collection(db, "students"),
-            where("email", "==", user.email)
-          );
-          const studentSnap = await getDocs(studentQuery);
+          const usersRef = collection(db, "users");
+          
+          let q = query(usersRef, where("email", "==", user.email));
+          let snapshot = await getDocs(q);
 
-          // 🔹 2. Check if user exists in teachers (by UID)
-          const teacherRef = doc(db, "users", user.uid);
-          const teacherSnap = await getDoc(teacherRef);
+          if (snapshot.empty) {
+            q = query(usersRef, where("emailAddress", "==", user.email));
+            snapshot = await getDocs(q);
+          }
 
-          if (!studentSnap.empty) {
-            // ✅ Student found
-            setUserDoc(studentSnap.docs[0].data());
-            setRole("student");
-          } else if (teacherSnap.exists()) {
-            // ✅ Teacher found
-            const teacherData = teacherSnap.data();
-            setUserDoc(teacherData);
-            setRole(teacherData.role || "teacher");
+          if (!snapshot.empty) {
+            const docData = snapshot.docs[0].data();
+            setUserDoc(docData);
+            setRole(docData.role || null);
+            console.log("User role:", docData.role);
           } else {
-            // ❌ No matching record
+            console.log("No user document found for:", user.email);
             setUserDoc(null);
             setRole(null);
           }
-        } catch (err) {
-          console.error("Error fetching user document:", err);
+        } catch (error) {
+          console.error("Error fetching user role:", error);
+          setUserDoc(null);
+          setRole(null);
         }
       } else {
+        // User logged out
         setAuthUser(null);
         setUserDoc(null);
         setRole(null);
@@ -71,7 +66,13 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-lg font-semibold">
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        fontSize: '18px'
+      }}>
         Loading...
       </div>
     );
@@ -80,75 +81,74 @@ function App() {
   return (
     <Router>
       <Routes>
-        {/* 🔸 Public Routes */}
+        {/* PUBLIC ROUTES */}
         <Route path="/" element={<LandingPage />} />
+
         <Route
           path="/login"
           element={
-            !authUser ? (
-              <LoginPage />
-            ) : role === "teacher" ? (
-              <Navigate to="/teacher" replace />
-            ) : role === "student" ? (
-              <Navigate to="/studentDashboard" replace />
+            authUser && role ? (
+              role === "teacher" ? (
+                <Navigate to="/teacher" replace />
+              ) : role === "student" ? (
+                <Navigate to="/studentDashboard" replace />
+              ) : role === "admin" ? (
+                <Navigate to="/AdminHomePage" replace />
+              ) : (
+                <LoginPage />
+              )
             ) : (
               <LoginPage />
             )
           }
         />
-        <Route path="/signup" element={<SignUpPage />} />
 
-        {/* 🔹 Student Dashboard */}
+        <Route
+          path="/signup"
+          element={<SignUpPage />}
+        />
+
+        {/* STUDENT DASHBOARD */}
         <Route
           path="/studentDashboard"
           element={
             authUser && role === "student" ? (
               <StudentDashboard user={authUser} userDoc={userDoc} />
-            ) : authUser && !role ? (
-              <div className="min-h-screen flex items-center justify-center">
-                <p>Loading user data...</p>
-              </div>
             ) : (
               <Navigate to="/login" replace />
             )
           }
         />
 
-        {/* 🔹 Teacher Dashboard */}
+        {/* TEACHER DASHBOARD */}
         <Route
           path="/teacher"
           element={
             authUser && role === "teacher" ? (
               <TeacherDashboard user={authUser} userDoc={userDoc} />
-            ) : authUser && !role ? (
-              <div className="min-h-screen flex items-center justify-center">
-                <p>Loading user data...</p>
-              </div>
             ) : (
               <Navigate to="/login" replace />
             )
           }
         >
-          <Route
-            index
-            element={
-              <div className="p-4">
-                <h2 className="text-xl font-semibold mb-4">
-                  Welcome to Smart Quiz!
-                </h2>
-                <p>
-                  Select an option from the sidebar to manage your classes,
-                  quizzes, or view analytics.
-                </p>
-              </div>
-            }
-          />
           <Route path="classes" element={<ManageClasses />} />
           <Route path="quizzes" element={<ManageQuizzes />} />
           <Route path="reports" element={<ReportsAnalytics />} />
         </Route>
 
-        {/* 🔸 Catch-all Redirect */}
+        {/* ADMIN */}
+        <Route
+          path="/AdminHomePage"
+          element={
+            authUser && role === "admin" ? (
+              <AdminHomePage />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* CATCH-ALL */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

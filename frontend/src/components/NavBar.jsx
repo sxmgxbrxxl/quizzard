@@ -22,7 +22,7 @@ export default function NavBar() {
                     alt="Logo"
                     className="h-9 w-9"
                 />
-                Quizzard
+                iQuizU
             </div>
 
             {/* Links */}

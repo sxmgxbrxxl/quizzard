@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { Upload, Loader2, Eye, X, UserPlus } from "lucide-react";
+import { Upload, Loader2, Eye } from "lucide-react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { auth, db } from "../../firebase/firebaseConfig";
-import { collection, addDoc, query, where, getDocs, deleteDoc, doc } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, deleteDoc, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import ClassNameModal from './ClassNameModal';
+import ViewClassModal from './ViewClassModal';
 
 export default function ManageClasses() {
   const [fileName, setFileName] = useState("");
@@ -19,7 +22,6 @@ export default function ManageClasses() {
   const [creatingAccounts, setCreatingAccounts] = useState(false);
   const [showClassNameModal, setShowClassNameModal] = useState(false);
   const [pendingUploadData, setPendingUploadData] = useState(null);
-  const [classNameInput, setClassNameInput] = useState("");
   
   const fetchingRef = useRef(false);
   const initialLoadRef = useRef(false);
@@ -75,17 +77,25 @@ export default function ManageClasses() {
   const fetchStudentsByClass = async (classId) => {
     try {
       setLoadingStudents(true);
+      
+      // Query users collection where role = "student" and classId matches
       const q = query(
-        collection(db, "students"),
+        collection(db, "users"),
+        where("role", "==", "student"),
         where("classId", "==", classId)
       );
+      
       const querySnapshot = await getDocs(q);
       
       const students = [];
       querySnapshot.forEach((docSnapshot) => {
-        students.push({ id: docSnapshot.id, ...docSnapshot.data() });
+        students.push({
+          id: docSnapshot.id,
+          ...docSnapshot.data()
+        });
       });
 
+      // Sort by name
       students.sort((a, b) => {
         const aName = a.name || "";
         const bName = b.name || "";
@@ -111,6 +121,35 @@ export default function ManageClasses() {
     setStudentsList([]);
   };
 
+  const createAccountInFirebase = async (studentData) => {
+    try {
+      // Use email address from classlist for Firebase Authentication
+      const email = studentData.emailAddress;
+      
+      // Check if email exists
+      if (!email || email.trim() === "") {
+        throw new Error(`No email address found for ${studentData.name}`);
+      }
+      
+      // Default password for all accounts
+      const password = "123456";
+
+      // Create user in Firebase Authentication
+      await createUserWithEmailAndPassword(auth, email, password);
+
+      console.log(`Account created for ${studentData.name} (${studentData.studentNo}) with email: ${email}`);
+      return true;
+    } catch (error) {
+      // Handle specific error for existing account
+      if (error.code === 'auth/email-already-in-use') {
+        console.log(`Account already exists for email: ${studentData.emailAddress}`);
+        return true; // Consider it success since account exists
+      }
+      console.error("Error creating account:", error);
+      throw error;
+    }
+  };
+
   const handleCreateAccountForAll = async () => {
     const studentsWithoutAccounts = studentsList.filter(s => !s.hasAccount);
 
@@ -119,7 +158,7 @@ export default function ManageClasses() {
       return;
     }
 
-    if (!window.confirm(`Create accounts for ${studentsWithoutAccounts.length} student(s)?`)) {
+    if (!window.confirm(`Create accounts for ${studentsWithoutAccounts.length} student(s) in Firebase Authentication?\n\nEmail: From Classlist\nDefault Password: 123456\n\nStudents will login using their Student Number.`)) {
       return;
     }
 
@@ -128,29 +167,46 @@ export default function ManageClasses() {
     try {
       let successCount = 0;
       let errorCount = 0;
+      const errors = [];
 
       for (let i = 0; i < studentsWithoutAccounts.length; i++) {
         try {
           const student = studentsWithoutAccounts[i];
-          console.log(`Creating account for: ${student.name}`);
+          console.log(`Creating account for: ${student.name} (${i + 1}/${studentsWithoutAccounts.length})`);
           
-          // TODO: Implement account creation logic here
-          // For now, just update the hasAccount field
+          // Create the account in Firebase Authentication
+          await createAccountInFirebase(student);
+          
+          // Update hasAccount status in Firestore
           await updateAccountStatus(student.id, true);
+          
           successCount++;
         } catch (error) {
           console.error("Error creating account:", error);
           errorCount++;
+          errors.push(`${studentsWithoutAccounts[i].name}: ${error.message}`);
         }
       }
 
-      let message = `✅ Successfully created ${successCount} account(s)!`;
+      let message = `✅ Successfully created ${successCount} account(s) in Firebase Authentication!`;
+      message += `\n\n📧 Email: From Classlist`;
+      message += `\n🔑 Default Password: 123456`;
+      message += `\n\n⚠️ Students will login using their STUDENT NUMBER`;
+      message += `\nThe system will check Firestore for their email.`;
+      
       if (errorCount > 0) {
-        message += `\n⚠️ ${errorCount} account(s) failed to create.`;
+        message += `\n\n⚠️ ${errorCount} account(s) failed to create.`;
+        if (errors.length > 0) {
+          message += `\n\nErrors:\n${errors.slice(0, 5).join('\n')}`;
+          if (errors.length > 5) {
+            message += `\n... and ${errors.length - 5} more`;
+          }
+        }
       }
+      
       alert(message);
 
-      // Refresh the student list
+      // Refresh the student list to show updated hasAccount status
       await fetchStudentsByClass(viewingClass.id);
     } catch (error) {
       console.error("Error creating accounts:", error);
@@ -160,12 +216,15 @@ export default function ManageClasses() {
     }
   };
 
-  const updateAccountStatus = async (studentId, hasAccount) => {
+  const updateAccountStatus = async (studentDocId, hasAccount) => {
     try {
-      const studentRef = doc(db, "students", studentId);
-      // Update the student document
-      // await updateDoc(studentRef, { hasAccount: hasAccount });
-      console.log(`Updated student ${studentId} account status to ${hasAccount}`);
+      const studentDocRef = doc(db, "users", studentDocId);
+      
+      await updateDoc(studentDocRef, {
+        hasAccount: hasAccount
+      });
+      
+      console.log(`Updated student ${studentDocId} account status to ${hasAccount}`);
     } catch (error) {
       console.error("Error updating account status:", error);
       throw error;
@@ -243,24 +302,16 @@ export default function ManageClasses() {
 
     console.log("Valid students:", validStudents.length);
 
-    // Get default class name from file name (remove extension)
     const defaultClassName = file.name.replace(/\.(csv|xlsx|xls)$/i, '');
     
-    // Store the data and show the class name modal
     setPendingUploadData({
       validStudents,
       file
     });
-    setClassNameInput(defaultClassName);
     setShowClassNameModal(true);
   };
 
-  const confirmClassNameAndUpload = async () => {
-    if (!classNameInput.trim()) {
-      alert("❌ Please enter a class name!");
-      return;
-    }
-
+  const confirmClassNameAndUpload = async (className) => {
     setShowClassNameModal(false);
     setUploading(true);
     setUploadProgress("Starting upload...");
@@ -275,10 +326,10 @@ export default function ManageClasses() {
       const { validStudents, file } = pendingUploadData;
       const teacherName = user.displayName || user.email?.split('@')[0] || "Teacher";
       
-      setUploadProgress(`Creating class: ${classNameInput}`);
+      setUploadProgress(`Creating class: ${className}`);
       
       const classDoc = await addDoc(collection(db, "classes"), {
-        name: classNameInput.trim(),
+        name: className,
         subject: "",
         studentCount: validStudents.length,
         teacherId: user.uid,
@@ -293,10 +344,11 @@ export default function ManageClasses() {
       let totalCount = 0;
       let errorCount = 0;
 
+      // Create individual documents for each student in the users collection
       for (let i = 0; i < validStudents.length; i++) {
         try {
           const student = validStudents[i];
-          setUploadProgress(`Adding student ${i + 1}/${validStudents.length}`);
+          setUploadProgress(`Processing student ${i + 1}/${validStudents.length}`);
 
           const {
             "No": no,
@@ -315,10 +367,11 @@ export default function ManageClasses() {
             continue;
           }
 
-          // Add student to Firestore
-          await addDoc(collection(db, "students"), {
-            no: no?.toString().trim() || "",
-            studentNo: studentNo.toString().trim(),
+          const cleanStudentNo = studentNo.toString().trim();
+
+          // Create individual document with random ID for each student
+          await addDoc(collection(db, "users"), {
+            studentNo: cleanStudentNo,
             name: name.toString().trim(),
             gender: gender?.toString().trim() || "",
             program: program?.toString().trim() || "",
@@ -326,15 +379,14 @@ export default function ManageClasses() {
             emailAddress: emailAddress?.toString().trim() || "",
             contactNo: contactNo?.toString().trim() || "",
             classId: classDoc.id,
-            teacherId: user.uid,
-            teacherName: teacherName,
+            role: "student",
             hasAccount: false,
             createdAt: new Date()
           });
 
           totalCount++;
         } catch (studentError) {
-          console.error("Error adding student:", validStudents[i], studentError);
+          console.error("Error processing student:", validStudents[i], studentError);
           errorCount++;
         }
       }
@@ -358,7 +410,6 @@ export default function ManageClasses() {
       setFileName("");
       setUploadProgress("");
       setPendingUploadData(null);
-      setClassNameInput("");
     } catch (error) {
       console.error("Error saving to Firestore:", error);
       setErrorMessage(error.message);
@@ -372,7 +423,6 @@ export default function ManageClasses() {
   const cancelClassNameModal = () => {
     setShowClassNameModal(false);
     setPendingUploadData(null);
-    setClassNameInput("");
     setFileName("");
   };
 
@@ -413,16 +463,14 @@ export default function ManageClasses() {
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
           
-          // Get all data without headers first to find the header row
           const allData = XLSX.utils.sheet_to_json(worksheet, { 
-            header: 1, // Get as array of arrays
+            header: 1,
             raw: false,
             defval: ""
           });
           
           console.log("First 15 rows:", allData.slice(0, 15));
           
-          // Find the row that contains "Student No." or "No"
           let headerRowIndex = -1;
           for (let i = 0; i < allData.length; i++) {
             const row = allData[i];
@@ -438,9 +486,8 @@ export default function ManageClasses() {
             throw new Error("Could not find header row with 'Student No.' and 'Name' columns");
           }
           
-          // Now parse again starting from the header row
           const range = XLSX.utils.decode_range(worksheet['!ref']);
-          range.s.r = headerRowIndex; // Start from header row
+          range.s.r = headerRowIndex;
           const newRange = XLSX.utils.encode_range(range);
           
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
@@ -477,25 +524,30 @@ export default function ManageClasses() {
   };
 
   const handleRemoveClass = async (classId) => {
-    if (!window.confirm("Are you sure you want to remove this class? This will also delete all students in this class.")) {
+    if (!window.confirm("Are you sure you want to remove this class? This will also remove all students in this class from the database.")) {
       return;
     }
 
     try {
-      const studentsQuery = query(
-        collection(db, "students"),
+      // Query and delete all student documents in this class
+      const q = query(
+        collection(db, "users"),
+        where("role", "==", "student"),
         where("classId", "==", classId)
       );
-      const studentsSnapshot = await getDocs(studentsQuery);
+      
+      const querySnapshot = await getDocs(q);
       
       const deletePromises = [];
-      studentsSnapshot.forEach((studentDoc) => {
-        deletePromises.push(deleteDoc(doc(db, "students", studentDoc.id)));
+      querySnapshot.forEach((docSnapshot) => {
+        deletePromises.push(deleteDoc(doc(db, "users", docSnapshot.id)));
       });
-
-      deletePromises.push(deleteDoc(doc(db, "classes", classId)));
-
+      
       await Promise.all(deletePromises);
+      console.log(`Removed ${deletePromises.length} students from class ${classId}`);
+
+      // Delete the class document
+      await deleteDoc(doc(db, "classes", classId));
 
       alert("✅ Class removed successfully!");
       await fetchClasses();
@@ -616,166 +668,24 @@ export default function ManageClasses() {
         )}
       </div>
 
-      {/* Class Name Modal */}
-      {showClassNameModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">Enter Class Name</h3>
-            <p className="text-gray-600 mb-4">
-              Please enter a name for this class:
-            </p>
-            <input
-              type="text"
-              value={classNameInput}
-              onChange={(e) => setClassNameInput(e.target.value)}
-              placeholder="e.g., CS101-A, Math 2024, English 101"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-6"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  confirmClassNameAndUpload();
-                }
-              }}
-              autoFocus
-            />
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={cancelClassNameModal}
-                className="px-5 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmClassNameAndUpload}
-                className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
-              >
-                Create Class
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modals */}
+      <ClassNameModal
+        isOpen={showClassNameModal}
+        defaultName={pendingUploadData?.file.name.replace(/\.(csv|xlsx|xls)$/i, '')}
+        onConfirm={confirmClassNameAndUpload}
+        onCancel={cancelClassNameModal}
+      />
 
-      {/* View Class Modal */}
       {viewingClass && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-7xl w-full max-h-[90vh] overflow-hidden">
-            <div className="bg-blue-600 text-white p-6 flex justify-between items-center">
-              <div>
-                <h3 className="text-2xl font-bold">{viewingClass.name}</h3>
-                <p className="text-blue-100 text-sm">
-                  {viewingClass.studentCount} student(s)
-                </p>
-              </div>
-              <button
-                onClick={closeModal}
-                className="text-white hover:bg-blue-700 rounded-lg p-2 transition"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
-              {loadingStudents ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-                </div>
-              ) : studentsList.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  <p>No students found in this class.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          No
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Student No.
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Name
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Gender
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Program
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Year
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Email Address
-                        </th>
-                        <th className="border border-gray-300 px-4 py-3 text-left font-semibold text-gray-700">
-                          Contact No.
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {studentsList.map((student, index) => (
-                        <tr key={student.id} className="hover:bg-gray-50">
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.no || index + 1}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.studentNo}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.name}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.gender || "—"}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.program || "—"}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.year || "—"}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.emailAddress || "—"}
-                          </td>
-                          <td className="border border-gray-300 px-4 py-3 text-gray-700">
-                            {student.contactNo || "—"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="border-t border-gray-200 p-4 flex justify-end gap-3">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-semibold"
-              >
-                Close
-              </button>
-              <button
-                onClick={handleCreateAccountForAll}
-                disabled={creatingAccounts || studentsList.every(s => s.hasAccount)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {creatingAccounts ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <UserPlus className="w-4 h-4" />
-                    Create Account for All
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ViewClassModal
+          isOpen={true}
+          classData={viewingClass}
+          students={studentsList}
+          loading={loadingStudents}
+          creatingAccounts={creatingAccounts}
+          onClose={closeModal}
+          onCreateAccounts={handleCreateAccountForAll}
+        />
       )}
     </div>
   );

@@ -1,5 +1,6 @@
+
 import { useState } from "react";
-import { FileUp, Edit3, Settings, Send, PlusCircle, X, Loader2, CheckCircle, Trash2 } from "lucide-react";
+import { FileUp, Edit3, Settings, Send, PlusCircle, X, Loader2, CheckCircle, Trash2, Brain } from "lucide-react";
 
 export default function ManageQuizzes() {
   const [quizzes, setQuizzes] = useState([
@@ -99,12 +100,12 @@ export default function ManageQuizzes() {
       type: question.type,
       points: question.points,
       correct_answer: question.correct_answer || "",
-      choices: question.choices ? [...question.choices] : null
+      choices: question.choices ? [...question.choices] : null,
+      bloom_classification: question.bloom_classification || "LOTS"
     });
   };
 
   const handleQuestionSave = (index) => {
-    // Validation
     if (!editForm.question.trim()) {
       alert("Question text cannot be empty");
       return;
@@ -136,7 +137,8 @@ export default function ManageQuizzes() {
       question: editForm.question,
       points: editForm.points,
       correct_answer: editForm.correct_answer,
-      choices: editForm.choices
+      choices: editForm.choices,
+      bloom_classification: editForm.bloom_classification
     };
 
     setGeneratedQuiz({ ...generatedQuiz, questions: updatedQuestions });
@@ -152,7 +154,9 @@ export default function ManageQuizzes() {
       choices: type === "multiple_choice" ? [
         { text: "", is_correct: false },
         { text: "", is_correct: false }
-      ] : null
+      ] : null,
+      bloom_classification: "LOTS",
+      classification_confidence: 0
     };
 
     setGeneratedQuiz({
@@ -169,7 +173,8 @@ export default function ManageQuizzes() {
       choices: type === "multiple_choice" ? [
         { text: "", is_correct: false },
         { text: "", is_correct: false }
-      ] : null
+      ] : null,
+      bloom_classification: "LOTS"
     });
   };
 
@@ -208,6 +213,27 @@ export default function ManageQuizzes() {
       setGeneratedQuiz(null);
       alert("Quiz published successfully!");
     }
+  };
+
+  // Helper function to get badge color
+  const getClassificationBadge = (classification, confidence) => {
+    const isHOTS = classification === "HOTS";
+    const bgColor = isHOTS ? "bg-purple-100" : "bg-blue-100";
+    const textColor = isHOTS ? "text-purple-700" : "text-blue-700";
+    const borderColor = isHOTS ? "border-purple-300" : "border-blue-300";
+    
+    return (
+      <div className="flex items-center gap-2">
+        <span className={`px-3 py-1 rounded-full text-xs font-bold border-2 ${bgColor} ${textColor} ${borderColor}`}>
+          {classification}
+        </span>
+        {confidence && (
+          <span className="text-xs text-gray-500">
+            {(confidence * 100).toFixed(1)}%
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -354,7 +380,7 @@ export default function ManageQuizzes() {
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
             {/* Header */}
-            <div className="flex justify-between items-center p-6 border-b bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-t-2xl">
+            <div className="flex justify-between items-center p-6 border-b bg-gradient-to-r from-blue-600 to-purple-700 text-white rounded-t-2xl">
               <div className="flex-1">
                 {isEditingTitle ? (
                   <div className="flex items-center gap-2">
@@ -380,18 +406,34 @@ export default function ManageQuizzes() {
                   </div>
                 ) : (
                   <div className="flex items-center gap-3">
-                    <h3 className="text-2xl font-bold">{generatedQuiz.title}</h3>
+                    <Brain className="w-8 h-8" />
+                    <div>
+                      <h3 className="text-2xl font-bold">{generatedQuiz.title}</h3>
+                      <div className="flex items-center gap-4 text-sm text-blue-100 mt-1">
+                        <span>📝 {generatedQuiz.questions.length} questions</span>
+                        <span>• {generatedQuiz.total_points || generatedQuiz.questions.reduce((sum, q) => sum + q.points, 0)} points</span>
+                        {generatedQuiz.classification_stats && (
+                          <>
+                            <span className="font-semibold">
+                              🟣 HOTS: {generatedQuiz.classification_stats.hots_count} 
+                              ({generatedQuiz.classification_stats.hots_percentage}%)
+                            </span>
+                            <span className="font-semibold">
+                              🔵 LOTS: {generatedQuiz.classification_stats.lots_count}
+                              ({generatedQuiz.classification_stats.lots_percentage}%)
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                     <button
                       onClick={handleTitleEdit}
-                      className="bg-blue-800 hover:bg-blue-900 rounded-lg px-3 py-1 text-sm flex items-center gap-1"
+                      className="bg-blue-800 hover:bg-blue-900 rounded-lg px-3 py-1 text-sm flex items-center gap-1 ml-auto"
                     >
                       <Edit3 className="w-4 h-4" /> Edit
                     </button>
                   </div>
                 )}
-                <p className="text-blue-100 text-sm mt-1">
-                  {generatedQuiz.questions.length} Questions • {generatedQuiz.total_points || generatedQuiz.questions.reduce((sum, q) => sum + q.points, 0)} Points
-                </p>
               </div>
               <button 
                 onClick={closePreviewModal} 
@@ -464,6 +506,17 @@ export default function ManageQuizzes() {
                                             onChange={(e) => setEditForm({ ...editForm, points: parseInt(e.target.value) || 1 })}
                                             className="w-full px-3 py-2 border rounded-lg"
                                           />
+                                        </div>
+                                        <div className="flex-1">
+                                          <label className="block text-sm font-semibold mb-2">Classification</label>
+                                          <select
+                                            value={editForm.bloom_classification}
+                                            onChange={(e) => setEditForm({ ...editForm, bloom_classification: e.target.value })}
+                                            className="w-full px-3 py-2 border rounded-lg"
+                                          >
+                                            <option value="LOTS">LOTS (Lower Order Thinking)</option>
+                                            <option value="HOTS">HOTS (Higher Order Thinking)</option>
+                                          </select>
                                         </div>
                                       </div>
 
@@ -580,13 +633,14 @@ export default function ManageQuizzes() {
                                           {q.originalIndex + 1}
                                         </span>
                                         <div className="flex-1">
-                                          <div className="flex items-center gap-2 mb-2">
+                                          <div className="flex items-center gap-2 mb-2 flex-wrap">
                                             <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">
                                               {q.type.replace("_", " ").toUpperCase()}
                                             </span>
                                             <span className="text-sm text-gray-600">
                                               {q.points} {q.points === 1 ? 'point' : 'points'}
                                             </span>
+                                            {getClassificationBadge(q.bloom_classification, q.classification_confidence)}
                                             <button
                                               onClick={() => handleQuestionEdit(q.originalIndex, q)}
                                               className="ml-auto text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
